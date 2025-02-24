@@ -33,7 +33,14 @@ async function run() {
 
     // GET API endpoint for accessing jobs
     app.get("/jobs", async (req, res) => {
-      const cursor = jobsCollection.find();
+      const email = req.query.email;
+
+      let query = {};
+      if (email) {
+        query = { hr_email: email };
+      }
+
+      const cursor = jobsCollection.find(query);
       const result = await cursor.toArray();
       res.send(result);
     });
@@ -47,7 +54,14 @@ async function run() {
       res.send(result);
     });
 
-    // POST API Endpoint for submittedJobApplications
+    // POST API for creating new job
+    app.post("/jobs", async (req, res) => {
+      const newJob = req.body;
+      const result = await jobsCollection.insertOne(newJob);
+      res.send(result);
+    });
+
+    // POST API Endpoint for job application submissions
     app.post("/job-applications", async (req, res) => {
       const application = req.body;
       const result = await jobApplicationCollections.insertOne(application);
@@ -58,10 +72,25 @@ async function run() {
     // query
     // ?name=value&name=value&name=value
     // Get data (one, some, many);
+
     app.get("/job-application", async (req, res) => {
       const email = req.query.email;
       const query = { applicant_email: email };
       const result = await jobApplicationCollections.find(query).toArray();
+
+      // Poor way to aggregate data
+      for (const application of result) {
+        const jobId = application.job_id;
+        const query = { _id: new ObjectId(jobId) };
+        const myApplication = await jobsCollection.findOne(query);
+
+        application.title = myApplication.title;
+        application.company = myApplication.company;
+        application.company_logo = myApplication.company_logo;
+        application.status = myApplication.status;
+        application.location = myApplication.location;
+      }
+
       res.send(result);
     });
 
