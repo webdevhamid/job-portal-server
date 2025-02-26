@@ -66,6 +66,25 @@ async function run() {
       const application = req.body;
       const result = await jobApplicationCollections.insertOne(application);
 
+      // Poor way to aggregate data
+      const id = application.job_id;
+      const query = { _id: new ObjectId(id) };
+      const job = await jobsCollection.findOne(query);
+
+      let count = 1;
+      if (job.totalApplicant) {
+        count = job.totalApplicant + 1;
+      }
+      // Update the job applicant number
+      const updateJob = {
+        $set: {
+          totalApplicant: count,
+        },
+      };
+      const newUpdatedJob = await jobsCollection.updateOne(query, updateJob);
+      console.log(newUpdatedJob);
+
+      // Return the result as response
       res.send(result);
     });
 
@@ -91,6 +110,30 @@ async function run() {
         application.location = myApplication.location;
       }
 
+      res.send(result);
+    });
+
+    // API endpoint for job specific applications
+    app.get("/job-applications/jobs/:job_id", async (req, res) => {
+      const jobId = req.params.job_id;
+      const query = { job_id: jobId };
+      const result = await jobApplicationCollections.find(query).toArray();
+      res.send(result);
+    });
+
+    // API for updating the job status using patch
+    app.patch("/job-applications/:applicant_id", async (req, res) => {
+      const applicantId = req.params.applicant_id;
+      const filter = { _id: new ObjectId(applicantId) };
+      const updatedStatus = req.body;
+
+      const updateDoc = {
+        $set: {
+          status: updatedStatus.status,
+        },
+      };
+
+      const result = await jobApplicationCollections.updateOne(filter, updateDoc);
       res.send(result);
     });
 
