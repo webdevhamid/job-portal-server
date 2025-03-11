@@ -4,10 +4,58 @@ const cors = require("cors");
 const app = express();
 const port = process.env.PORT || 3000;
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
 
 // Middleware
-app.use(cors());
+app.use(
+  cors({
+    origin: "http://localhost:5173",
+    credentials: true,
+  })
+);
 app.use(express.json());
+app.use(cookieParser());
+
+// Custom Middleware
+const logger = (req, res, next) => {
+  console.log("Inside the logger middleware");
+  next();
+};
+
+const verifyToken = (req, res, next) => {
+  // console.log("Inside verify token middleware", req.cookies);
+  const token = req?.cookies?.token;
+  //
+  if (!token) {
+    return res.status(401).send({ message: "Unauthorized access!" });
+  }
+  //
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(401).send({ message: "Unauthorized Access" });
+    }
+
+    next();
+  });
+};
+
+const verifyToken2 = (req, res, next) => {
+  const token = req?.cookies?.token;
+  if (!token) {
+    return res.status(401).send({ message: "Unauthorized access" });
+  }
+
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(401).send({ message: "Unauthorized access" });
+    }
+    // If successfully verified
+    req.user = decoded;
+    //
+    next();
+  });
+};
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.w1xw1.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 // const uri = `mongodb://localhost:27017`;
@@ -29,10 +77,26 @@ async function run() {
     // Job related API's
     const database = client.db("jobPortalDB");
     const jobsCollection = database.collection("jobs");
-    const jobApplicationCollections = database.collection("jobApplications");
+    const jobApplicationCollection = database.collection("jobApplications");
 
-    // GET API endpoint for accessing jobs
-    app.get("/jobs", async (req, res) => {
+    // API for creating jwt token
+    app.post("/jwt", async (req, res) => {
+      const { email } = req.body;
+      console.log({ email });
+      const token = jwt.sign({ email }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: "1h" });
+      res
+        .cookie("token", token, {
+          httpOnly: true,
+          secure: false, // For localhost
+          // sameSite: "strict",
+        })
+        .send({ success: true });
+    });
+
+    // GET API endpoint for accessing jobs with or without email
+    app.get("/jobs", logger, async (req, res) => {
+      console.log("Inside the other API callback");
+
       const email = req.query.email;
 
       let query = {};
@@ -45,15 +109,6 @@ async function run() {
       res.send(result);
     });
 
-    // GET API Endpoint for specific jobs related data
-    app.get("/jobs/:id", async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      // const query = { _id: id };
-      const result = await jobsCollection.findOne(query);
-      res.send(result);
-    });
-
     // POST API for creating new job
     app.post("/jobs", async (req, res) => {
       const newJob = req.body;
@@ -61,10 +116,18 @@ async function run() {
       res.send(result);
     });
 
+    // GET API Endpoint for specific jobs related data
+    app.get("/jobs/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await jobsCollection.findOne(query);
+      res.send(result);
+    });
+
     // POST API Endpoint for job application submissions
     app.post("/job-applications", async (req, res) => {
       const application = req.body;
-      const result = await jobApplicationCollections.insertOne(application);
+      const result = await jobApplicationCollection.insertOne(application);
 
       // Poor way to aggregate data
       const id = application.job_id;
@@ -76,12 +139,12 @@ async function run() {
         count = job.totalApplicant + 1;
       }
       // Update the job applicant number
-      const updateJob = {
+      const updateDoc = {
         $set: {
           totalApplicant: count,
         },
       };
-      const newUpdatedJob = await jobsCollection.updateOne(query, updateJob);
+      const newUpdatedJob = await jobsCollection.updateOne(query, updateDoc);
       console.log(newUpdatedJob);
 
       // Return the result as response
@@ -92,10 +155,19 @@ async function run() {
     // ?name=value&name=value&name=value
     // Get data (one, some, many);
 
-    app.get("/job-application", async (req, res) => {
+    // API for getting my applied jobs using email address query
+    app.get("/job-application", verifyToken2, async (req, res) => {
       const email = req.query.email;
       const query = { applicant_email: email };
-      const result = await jobApplicationCollections.find(query).toArray();
+
+      if (req.user.email !== email) {
+        return res.status(403).send({ message: "Forbidden access" });
+      }
+
+      const result = await jobApplicationCollection.find(query).toArray();
+
+      console.log(`Cookies`, req.cookies);
+      console.log(req.user);
 
       // Poor way to aggregate data
       for (const application of result) {
@@ -117,15 +189,15 @@ async function run() {
     app.get("/job-applications/jobs/:job_id", async (req, res) => {
       const jobId = req.params.job_id;
       const query = { job_id: jobId };
-      const result = await jobApplicationCollections.find(query).toArray();
+      const result = await jobApplicationCollection.find(query).toArray();
       res.send(result);
     });
 
     // API for updating the job status using patch
-    app.patch("/job-applications/:applicant_id", async (req, res) => {
-      const applicantId = req.params.applicant_id;
-      const filter = { _id: new ObjectId(applicantId) };
+    app.patch("/job-applications/:id", async (req, res) => {
+      const jobId = req.params.id;
       const updatedStatus = req.body;
+      const filter = { _id: new ObjectId(jobId) };
 
       const updateDoc = {
         $set: {
@@ -133,7 +205,7 @@ async function run() {
         },
       };
 
-      const result = await jobApplicationCollections.updateOne(filter, updateDoc);
+      const result = await jobApplicationCollection.updateOne(filter, updateDoc);
       res.send(result);
     });
 
